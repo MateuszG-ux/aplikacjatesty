@@ -2,8 +2,7 @@
 
 /*
  * STOCKFLOW — wersja demonstracyjna
- * Dane są zapisywane lokalnie w przeglądarce.
- * To nie jest jeszcze synchronizacja między urządzeniami.
+ * Dane zapisywane lokalnie w przeglądarce.
  */
 
 const CLOTHING_SIZES = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
@@ -21,6 +20,8 @@ const SHOE_SIZES = Array.from(
 const GLOVE_SIZES = ["8", "9", "10", "11"];
 
 const TOTAL_STOCK_KEY = "__total";
+const DEFAULT_MINIMUM = 3;
+const MAX_STOCK_VALUE = 99999;
 
 function getProductSizes(product) {
   if (product.category === "ppe") return [];
@@ -93,7 +94,10 @@ const CATEGORY_FILTERS = {
   ]
 };
 
-// Lista produktów
+/* ========================================
+   PRODUKTY
+======================================== */
+
 const PRODUCTS = [
   // ODZIEŻ
   {
@@ -234,7 +238,7 @@ const PRODUCTS = [
     image: "images/butyz.png"
   },
 
-  // POZOSTAŁE — MARKERY
+  // MARKERY
   {
     id: "pozostale-01",
     name: "Marker żółty",
@@ -303,7 +307,7 @@ const PRODUCTS = [
     image: "https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&w=500&q=80"
   },
 
-  // POZOSTAŁE WYPOSAŻENIE — BEZ ROZMIARU
+  // POZOSTAŁE WYPOSAŻENIE
   {
     id: "pozostale-10",
     name: "Lampka czołowa",
@@ -373,6 +377,7 @@ const STORAGE_KEY = "stockflow-demo-v1";
 
 let activeCategory = "odziez";
 let activeFilter = "all";
+let activeView = "products";
 let searchQuery = "";
 
 const productList = document.getElementById("product-list");
@@ -381,28 +386,32 @@ const resultsCount = document.getElementById("results-count");
 const emptyMessage = document.getElementById("empty-message");
 const searchInput = document.getElementById("search");
 
-// Tworzenie początkowych stanów magazynowych
+/* ========================================
+   STAN I ZAPIS DANYCH
+======================================== */
+
 function createDefaultState() {
-  const state = {};
+  const initialState = {};
 
   PRODUCTS.forEach((product) => {
     const sizes = getProductSizes(product);
+    const keys = sizes.length ? sizes : [TOTAL_STOCK_KEY];
 
-    const quantities = sizes.length
-      ? Object.fromEntries(sizes.map((size) => [size, 0]))
-      : { [TOTAL_STOCK_KEY]: 0 };
-
-    state[product.id] = {
-      quantities,
+    initialState[product.id] = {
+      quantities: Object.fromEntries(
+        keys.map((key) => [key, 0])
+      ),
+      minimums: Object.fromEntries(
+        keys.map((key) => [key, DEFAULT_MINIMUM])
+      ),
       selectedSize: sizes[0] ?? null,
       step: 2
     };
   });
 
-  return state;
+  return initialState;
 }
 
-// Wczytywanie zapisanych danych
 function loadState() {
   const defaults = createDefaultState();
 
@@ -413,46 +422,62 @@ function loadState() {
 
     const parsed = JSON.parse(saved);
 
+    if (!parsed || typeof parsed !== "object") {
+      return defaults;
+    }
+
     PRODUCTS.forEach((product) => {
       const existing = parsed[product.id];
 
-      if (!existing) return;
+      if (!existing || typeof existing !== "object") return;
 
       const sizes = getProductSizes(product);
       const target = defaults[product.id];
+      const keys = sizes.length ? sizes : [TOTAL_STOCK_KEY];
 
-      sizes.forEach((size) => {
-        const value = Number(existing.quantities?.[size]);
+      keys.forEach((key) => {
+        const savedMinimum = Number(existing.minimums?.[key]);
 
-        if (Number.isFinite(value) && value >= 0) {
-          target.quantities[size] = Math.floor(value);
+        if (
+          existing.minimums?.[key] !== undefined &&
+          Number.isInteger(savedMinimum) &&
+          savedMinimum >= 0 &&
+          savedMinimum <= MAX_STOCK_VALUE
+        ) {
+          target.minimums[key] = savedMinimum;
+        }
+
+        const value = Number(existing.quantities?.[key]);
+
+        if (
+          existing.quantities?.[key] !== undefined &&
+          Number.isFinite(value) &&
+          value >= 0
+        ) {
+          target.quantities[key] = Math.min(
+            Math.floor(value),
+            MAX_STOCK_VALUE
+          );
         }
       });
 
+      // Obsługa starszych zapisów dla produktów bez rozmiarów.
       if (sizes.length === 0) {
-        const savedTotal = Number(
-          existing.quantities?.[TOTAL_STOCK_KEY]
-        );
+        const hasTotal =
+          existing.quantities?.[TOTAL_STOCK_KEY] !== undefined;
 
-        if (
-          Number.isFinite(savedTotal) &&
-          savedTotal >= 0 &&
-          existing.quantities?.[TOTAL_STOCK_KEY] !== undefined
-        ) {
-          target.quantities[TOTAL_STOCK_KEY] = Math.floor(savedTotal);
-        } else {
-          const legacyTotal = Object.values(
-            existing.quantities ?? {}
+        if (!hasTotal && existing.quantities) {
+          target.quantities[TOTAL_STOCK_KEY] = Object.values(
+            existing.quantities
           ).reduce((sum, value) => {
             const number = Number(value);
 
-            return sum +
-              (Number.isFinite(number) && number > 0
+            return sum + (
+              Number.isFinite(number) && number > 0
                 ? Math.floor(number)
-                : 0);
+                : 0
+            );
           }, 0);
-
-          target.quantities[TOTAL_STOCK_KEY] = legacyTotal;
         }
       }
 
@@ -462,8 +487,12 @@ function loadState() {
 
       const step = Number(existing.step);
 
-      if (Number.isFinite(step) && step >= 1 && step <= 99999) {
-        target.step = Math.floor(step);
+      if (
+        Number.isInteger(step) &&
+        step >= 1 &&
+        step <= MAX_STOCK_VALUE
+      ) {
+        target.step = step;
       }
     });
 
@@ -476,7 +505,6 @@ function loadState() {
 
 let state = loadState();
 
-// Zapisywanie danych
 function saveState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -486,7 +514,6 @@ function saveState() {
   }
 }
 
-// Zabezpieczenie tekstu wyświetlanego w HTML
 function escapeHTML(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -497,7 +524,6 @@ function escapeHTML(value) {
   })[char]);
 }
 
-// Kolory stanów magazynowych
 function stockClass(quantity) {
   if (quantity === 0) return "stock-empty";
   if (quantity <= 2) return "stock-low";
@@ -505,8 +531,49 @@ function stockClass(quantity) {
   return "stock-good";
 }
 
-// Wyświetlanie filtrów
+function getMinimum(product, key) {
+  const minimum = Number(state[product.id]?.minimums?.[key]);
+
+  return Number.isInteger(minimum) && minimum >= 0
+    ? minimum
+    : DEFAULT_MINIMUM;
+}
+
+function updateMinimum(productId, key, value) {
+  const productState = state[productId];
+  const minimum = Number(value);
+
+  if (
+    !productState ||
+    !Number.isInteger(minimum) ||
+    minimum < 0 ||
+    minimum > MAX_STOCK_VALUE
+  ) {
+    return false;
+  }
+
+  if (!productState.minimums) {
+    productState.minimums = {};
+  }
+
+  productState.minimums[key] = minimum;
+  saveState();
+
+  return true;
+}
+
+/* ========================================
+   FILTRY I WYSZUKIWANIE
+======================================== */
+
 function renderFilters() {
+  filtersContainer.hidden = activeView === "orders";
+
+  if (activeView === "orders") {
+    filtersContainer.innerHTML = "";
+    return;
+  }
+
   const options = CATEGORY_FILTERS[activeCategory];
 
   filtersContainer.innerHTML = options.map((filter) => `
@@ -519,7 +586,6 @@ function renderFilters() {
   `).join("");
 }
 
-// Filtrowanie produktów
 function getVisibleProducts() {
   return PRODUCTS.filter((product) => {
     const categoryMatches = product.category === activeCategory;
@@ -527,21 +593,147 @@ function getVisibleProducts() {
     const filterMatches =
       activeFilter === "all" || product.type === activeFilter;
 
-    const searchMatches =
-      product.name.toLocaleLowerCase("pl").includes(
-        searchQuery.toLocaleLowerCase("pl")
-      );
+    const searchMatches = product.name
+      .toLocaleLowerCase("pl")
+      .includes(searchQuery.toLocaleLowerCase("pl"));
 
     return categoryMatches && filterMatches && searchMatches;
   });
 }
 
-// Wyświetlanie produktów
+/* ========================================
+   POMOCNICZE HTML
+======================================== */
+
+function renderProductImage(product) {
+  return `
+    <div class="product-image-wrap">
+      <img
+        class="product-image"
+        src="${escapeHTML(product.image)}"
+        alt="${escapeHTML(product.name)}"
+        loading="lazy"
+        referrerpolicy="no-referrer"
+      >
+    </div>
+  `;
+}
+
+/*
+ * Przyciski są zgrupowane w jednej kolumnie.
+ * Nowe klasy pozwalają nadać im większy rozmiar w CSS.
+ */
+function renderStockControls(product, quantity) {
+  const productState = state[product.id];
+
+  return `
+    <div class="stock-actions-column">
+      <div class="stock-controls stock-controls-large">
+        <button
+          class="small-action small-action-large"
+          data-action="add-one"
+          data-product="${product.id}"
+          type="button"
+          aria-label="Dodaj jedną sztukę"
+          title="Dodaj 1 sztukę"
+        >+1</button>
+
+        <output
+          class="stock-number"
+          aria-label="Aktualny stan magazynowy"
+          aria-live="polite"
+        >${quantity}</output>
+
+        <button
+          class="small-action small-action-large"
+          data-action="remove-one"
+          data-product="${product.id}"
+          type="button"
+          aria-label="Odejmij jedną sztukę"
+          title="Odejmij 1 sztukę"
+          ${quantity === 0 ? "disabled" : ""}
+        >-1</button>
+      </div>
+
+      <div class="step-controls step-controls-large">
+        <button
+          class="step-action step-action-large"
+          data-action="add-step"
+          data-product="${product.id}"
+          type="button"
+          aria-label="Dodaj wybraną liczbę sztuk"
+        >+</button>
+
+        <input
+          class="step-value step-value-large"
+          type="number"
+          min="1"
+          max="${MAX_STOCK_VALUE}"
+          step="1"
+          inputmode="numeric"
+          value="${productState.step}"
+          data-step="${product.id}"
+          aria-label="Liczba sztuk do dodania lub odjęcia"
+        >
+
+        <button
+          class="step-action step-action-large"
+          data-action="remove-step"
+          data-product="${product.id}"
+          type="button"
+          aria-label="Odejmij wybraną liczbę sztuk"
+          ${quantity === 0 ? "disabled" : ""}
+        >-</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMinimum(product, stockKey, minimum, selectedSize) {
+  const hasSizes = getProductSizes(product).length > 0;
+
+  return `
+    <div class="minimum-panel">
+      <span class="minimum-label">MINIMUM</span>
+
+      <label class="minimum-control">
+        <input
+          class="minimum-input"
+          type="number"
+          min="0"
+          max="${MAX_STOCK_VALUE}"
+          step="1"
+          inputmode="numeric"
+          value="${minimum}"
+          data-minimum="${product.id}"
+          data-minimum-key="${escapeHTML(stockKey)}"
+          aria-label="Minimalny stan: ${escapeHTML(product.name)}${hasSizes ? `, rozmiar ${escapeHTML(selectedSize)}` : ""}"
+        >
+        <span>szt.</span>
+      </label>
+    </div>
+  `;
+}
+
+/* ========================================
+   KAFELKI PRODUKTÓW
+======================================== */
+
 function renderProducts() {
+  if (activeView === "orders") {
+    renderOrderProducts();
+    return;
+  }
+
   const products = getVisibleProducts();
 
   resultsCount.textContent = `Produkty: ${products.length}`;
   emptyMessage.hidden = products.length > 0;
+
+  if (products.length === 0) {
+    productList.innerHTML = "";
+    return;
+  }
 
   productList.innerHTML = products.map((product) => {
     const productState = state[product.id];
@@ -551,6 +743,7 @@ function renderProducts() {
     const selectedSize = productState.selectedSize;
     const stockKey = hasSizes ? selectedSize : TOTAL_STOCK_KEY;
     const quantity = productState.quantities[stockKey] ?? 0;
+    const minimum = getMinimum(product, stockKey);
 
     const sizeRows = sizes.map((size) => {
       const sizeQuantity = productState.quantities[size] ?? 0;
@@ -564,161 +757,248 @@ function renderProducts() {
           aria-selected="${selected}"
         >
           <td class="size-label">${escapeHTML(size)}</td>
-          <td class="size-quantity ${stockClass(sizeQuantity)}">${sizeQuantity}</td>
+          <td class="size-quantity ${stockClass(sizeQuantity)}">
+            ${sizeQuantity}
+          </td>
         </tr>
       `;
     }).join("");
 
+    /*
+     * Produk z rozmiarami:
+     * zdjęcie | tabela rozmiarów | wybrany rozmiar |
+     * przyciski zmiany stanu | minimum
+     *
+     * Produkty bez rozmiarów:
+     * zdjęcie | stan i przyciski | minimum
+     */
+
+    if (!hasSizes) {
+      return `
+        <article
+          class="product-row product-row-no-sizes"
+          data-product-row="${product.id}"
+        >
+          <h2 class="product-name">
+            ${escapeHTML(product.name)}
+          </h2>
+
+          ${renderProductImage(product)}
+<div class="stock-management-layout">
+  <div class="selected-size-column">
+    <div class="stock-heading">WYBRANY ROZMIAR</div>
+
+    <div class="selected-size">
+      <span class="selected-size-badge">
+        Brak rozmiaru do wyboru
+      </span>
+    </div>
+  </div>
+
+  ${renderStockControls(product, quantity)}
+</div>
+
+          ${renderMinimum(product, stockKey, minimum, selectedSize)}
+        </article>
+      `;
+    }
+
     return `
       <article
-        class="product-row ${hasSizes ? "" : "product-row-no-sizes"}"
+        class="product-row product-row-has-sizes"
         data-product-row="${product.id}"
       >
-        <div class="product-image-wrap">
+        <h2 class="product-name">
+          ${escapeHTML(product.name)}
+        </h2>
+
+        ${renderProductImage(product)}
+
+        <div class="size-table-wrap">
+          <table
+            class="size-table"
+            aria-label="Stany rozmiarów: ${escapeHTML(product.name)}"
+          >
+            <tbody>${sizeRows}</tbody>
+          </table>
+        </div>
+
+        <div class="stock-panel">
+          <div class="stock-management-layout">
+            <div class="selected-size-column">
+              <div class="stock-heading">WYBRANY ROZMIAR</div>
+
+              <div class="selected-size">
+  <span class="selected-size-badge">
+    ${hasSizes
+      ? escapeHTML(selectedSize)
+      : "Brak rozmiaru do wyboru"}
+  </span>
+</div>
+            </div>
+
+            ${renderStockControls(product, quantity)}
+          </div>
+        </div>
+
+        ${renderMinimum(product, stockKey, minimum, selectedSize)}
+      </article>
+    `;
+  }).join("");
+
+  handleImageFallbacks(".product-image");
+}
+
+/* ========================================
+   DO ZAMÓWIENIA
+======================================== */
+
+function renderOrderProducts() {
+  const rows = [];
+
+  PRODUCTS.forEach((product) => {
+    const productState = state[product.id];
+    const sizes = getProductSizes(product);
+    const keys = sizes.length ? sizes : [TOTAL_STOCK_KEY];
+
+    keys.forEach((key) => {
+      const quantity = productState.quantities[key] ?? 0;
+      const minimum = getMinimum(product, key);
+
+      if (quantity > minimum) return;
+
+      const sizeLabel = sizes.length
+        ? `Rozmiar: ${escapeHTML(key)}`
+        : "Bez rozmiaru";
+
+      const searchText =
+        `${product.name} ${sizes.length ? key : ""}`
+          .toLocaleLowerCase("pl");
+
+      if (
+        searchQuery &&
+        !searchText.includes(searchQuery.toLocaleLowerCase("pl"))
+      ) {
+        return;
+      }
+
+      const shortage = Math.max(0, minimum - quantity);
+
+      rows.push(`
+        <article class="order-row">
           <img
-            class="product-image"
+            class="order-image"
             src="${escapeHTML(product.image)}"
             alt="${escapeHTML(product.name)}"
             loading="lazy"
             referrerpolicy="no-referrer"
           >
-        </div>
 
-        <div class="size-table-wrap ${hasSizes ? "" : "no-size-placeholder"}">
-          ${
-            hasSizes
-              ? `
-                <table
-                  class="size-table"
-                  aria-label="Stany rozmiarów: ${escapeHTML(product.name)}"
-                >
-                  <tbody>${sizeRows}</tbody>
-                </table>
-              `
-              : `<div class="no-size-label">Stan</div>`
-          }
-        </div>
+          <div class="order-details">
+            <h2 class="order-name">
+              ${escapeHTML(product.name)}
+            </h2>
 
-        <div class="stock-panel">
-          <h2 class="product-name">${escapeHTML(product.name)}</h2>
+            <div class="order-meta">
+              <span class="order-size">
+                ${sizeLabel}
+              </span>
 
-          ${
-            hasSizes
-              ? `<div class="stock-heading">ROZMIAR</div>`
-              : ""
-          }
+              <span class="order-stock">
+                Stan: <strong>${quantity}</strong>
+              </span>
 
-          ${
-            hasSizes
-              ? `
-                <div class="selected-size">
-                  <span class="selected-size-badge">
-                    ${escapeHTML(selectedSize)}
-                  </span>
-                </div>
-              `
-              : ""
-          }
+              <span class="order-minimum">
+                Minimum: <strong>${minimum}</strong>
+              </span>
 
-          <div class="stock-controls">
-            <button
-              class="small-action"
-              data-action="add-one"
-              data-product="${product.id}"
-              type="button"
-              aria-label="Dodaj jedną sztukę"
-              title="Dodaj 1 sztukę"
-            >+1</button>
-
-            <output
-              class="stock-number"
-              aria-label="Aktualny stan magazynowy"
-              aria-live="polite"
-            >${quantity}</output>
-
-            <button
-              class="small-action"
-              data-action="remove-one"
-              data-product="${product.id}"
-              type="button"
-              aria-label="Odejmij jedną sztukę"
-              title="Odejmij 1 sztukę"
-              ${quantity === 0 ? "disabled" : ""}
-            >-1</button>
+              ${
+                shortage > 0
+                  ? `
+                    <span class="order-shortage">
+                      Brakuje: <strong>${shortage}</strong>
+                    </span>
+                  `
+                  : `
+                    <span class="order-shortage order-shortage-ok">
+                      Na poziomie minimum
+                    </span>
+                  `
+              }
+            </div>
           </div>
+        </article>
+      `);
+    });
+  });
 
-          <div class="step-controls">
-            <button
-              class="step-action"
-              data-action="add-step"
-              data-product="${product.id}"
-              type="button"
-              aria-label="Dodaj wybraną liczbę sztuk"
-            >+</button>
+  resultsCount.textContent = `Do zamówienia: ${rows.length}`;
+  emptyMessage.hidden = true;
 
-            <input
-              class="step-value"
-              type="number"
-              min="1"
-              max="99999"
-              step="1"
-              inputmode="numeric"
-              value="${productState.step}"
-              data-step="${product.id}"
-              aria-label="Liczba sztuk do dodania lub odjęcia"
-            >
-
-            <button
-              class="step-action"
-              data-action="remove-step"
-              data-product="${product.id}"
-              type="button"
-              aria-label="Odejmij wybraną liczbę sztuk"
-              ${quantity === 0 ? "disabled" : ""}
-            >-</button>
-          </div>
-        </div>
-      </article>
+  if (rows.length === 0) {
+    productList.innerHTML = `
+      <div class="order-empty">
+        <strong>Magazyn jest na bieżąco.</strong><br>
+        Żaden produkt nie wymaga obecnie zamówienia.
+      </div>
     `;
-  }).join("");
+    return;
+  }
 
-  // Jeśli zdjęcie się nie załaduje, pokaż neutralne tło.
-  productList.querySelectorAll(".product-image").forEach((img) => {
+  productList.innerHTML = `
+    <div class="order-list">
+      ${rows.join("")}
+    </div>
+  `;
+
+  handleImageFallbacks(".order-image");
+}
+
+function handleImageFallbacks(selector) {
+  productList.querySelectorAll(selector).forEach((img) => {
     img.addEventListener("error", () => {
       img.style.display = "none";
 
-      img.parentElement.style.background =
-        "linear-gradient(135deg, #353328, #171715)";
+      const parent = img.parentElement;
 
-      img.parentElement.setAttribute(
-        "aria-label",
-        "Brak zdjęcia produktu"
-      );
+      if (parent) {
+        parent.classList.add("image-unavailable");
+        parent.setAttribute("aria-label", "Brak zdjęcia produktu");
+      }
     }, { once: true });
   });
 }
 
-// Odświeżanie całego widoku
+/* ========================================
+   GŁÓWNE RENDEROWANIE
+======================================== */
+
 function render() {
   renderFilters();
 
-  // Dodaj przycisk „Pozostałe”, jeśli nie ma go w index.html.
-  const mainCategories = document.querySelector(".main-categories");
+  const categories = document.querySelector(".main-categories");
 
   if (
-    mainCategories &&
-    !mainCategories.querySelector('[data-category="pozostale"]')
+    categories &&
+    !categories.querySelector('[data-category="pozostale"]')
   ) {
     const button = document.createElement("button");
+
     button.className = "main-tab";
     button.type = "button";
     button.dataset.category = "pozostale";
     button.textContent = "Pozostałe";
-    mainCategories.appendChild(button);
+
+    categories.appendChild(button);
   }
 
   document.querySelectorAll(".main-tab").forEach((button) => {
-    const active = button.dataset.category === activeCategory;
+    const isOrdersTab = button.dataset.view === "orders";
+
+    const active = isOrdersTab
+      ? activeView === "orders"
+      : activeView === "products" &&
+        button.dataset.category === activeCategory;
 
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
@@ -727,17 +1007,20 @@ function render() {
   renderProducts();
 }
 
-// Wybór kategorii głównej
+/* ========================================
+   ZMIANA WIDOKU I FILTRÓW
+======================================== */
+
 function selectCategory(category) {
   if (!CATEGORY_FILTERS[category]) return;
 
+  activeView = "products";
   activeCategory = category;
   activeFilter = "all";
 
   render();
 }
 
-// Wybór filtra
 function selectFilter(filter) {
   const valid = CATEGORY_FILTERS[activeCategory].some(
     (option) => option.id === filter
@@ -746,11 +1029,13 @@ function selectFilter(filter) {
   if (!valid) return;
 
   activeFilter = filter;
-
   render();
 }
 
-// Wybór rozmiaru
+/* ========================================
+   WYBÓR ROZMIARU I ZMIANA STANU
+======================================== */
+
 function selectSize(productId, size) {
   const product = PRODUCTS.find((item) => item.id === productId);
 
@@ -768,7 +1053,6 @@ function selectSize(productId, size) {
   renderProducts();
 }
 
-// Zmiana stanu magazynowego
 function changeStock(productId, amount) {
   const product = PRODUCTS.find((item) => item.id === productId);
   const productState = state[productId];
@@ -786,8 +1070,7 @@ function changeStock(productId, amount) {
   const current = productState.quantities[stockKey] ?? 0;
   const next = current + amount;
 
-  // Stan nie może spaść poniżej zera.
-  if (next < 0) return;
+  if (next < 0 || next > MAX_STOCK_VALUE) return;
 
   productState.quantities[stockKey] = next;
 
@@ -795,33 +1078,53 @@ function changeStock(productId, amount) {
   renderProducts();
 }
 
-// Ustawianie liczby sztuk dla większej zmiany
 function updateStep(productId, value) {
-  if (!state[productId]) return;
+  if (!state[productId]) return false;
 
   const parsed = Number(value);
 
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 99999) {
-    return;
+  if (
+    !Number.isInteger(parsed) ||
+    parsed < 1 ||
+    parsed > MAX_STOCK_VALUE
+  ) {
+    return false;
   }
 
-  state[productId].step = Math.floor(parsed);
-
+  state[productId].step = parsed;
   saveState();
+
+  return true;
 }
 
-// Obsługa kategorii głównych
-document
-  .querySelector(".main-categories")
-  .addEventListener("click", (event) => {
-    const button = event.target.closest("[data-category]");
+/* ========================================
+   OBSŁUGA KATEGORII
+======================================== */
+
+const mainCategories = document.querySelector(".main-categories");
+
+if (mainCategories) {
+  mainCategories.addEventListener("click", (event) => {
+    const button = event.target.closest(".main-tab");
 
     if (!button) return;
 
-    selectCategory(button.dataset.category);
-  });
+    if (button.dataset.view === "orders") {
+      activeView = "orders";
+      render();
+      return;
+    }
 
-// Obsługa filtrów podrzędnych
+    if (button.dataset.category) {
+      selectCategory(button.dataset.category);
+    }
+  });
+}
+
+/* ========================================
+   OBSŁUGA FILTRÓW
+======================================== */
+
 filtersContainer.addEventListener("click", (event) => {
   const button = event.target.closest("[data-filter]");
 
@@ -830,7 +1133,10 @@ filtersContainer.addEventListener("click", (event) => {
   selectFilter(button.dataset.filter);
 });
 
-// Obsługa kliknięć w rozmiary i przyciski ilości
+/* ========================================
+   OBSŁUGA PRZYCISKÓW I ROZMIARÓW
+======================================== */
+
 productList.addEventListener("click", (event) => {
   const sizeRow = event.target.closest("[data-size][data-product]");
 
@@ -866,7 +1172,45 @@ productList.addEventListener("click", (event) => {
   }
 });
 
-// Obsługa pola większej zmiany ilości
+/* ========================================
+   OBSŁUGA MINIMUM MAGAZYNOWEGO
+======================================== */
+
+productList.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-minimum]");
+
+  if (!input) return;
+
+  const productId = input.dataset.minimum;
+  const key = input.dataset.minimumKey;
+  const value = Number(input.value);
+
+  const product = PRODUCTS.find((item) => item.id === productId);
+
+  if (!product) return;
+
+  if (
+    input.value.trim() === "" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > MAX_STOCK_VALUE
+  ) {
+    input.value = getMinimum(product, key);
+    return;
+  }
+
+  if (!updateMinimum(productId, key, value)) {
+    input.value = getMinimum(product, key);
+    return;
+  }
+
+  renderProducts();
+});
+
+/* ========================================
+   OBSŁUGA LICZBY ZMIANY
+======================================== */
+
 productList.addEventListener("change", (event) => {
   const input = event.target.closest("[data-step]");
 
@@ -875,8 +1219,13 @@ productList.addEventListener("change", (event) => {
   const productId = input.dataset.step;
   const value = Number(input.value);
 
-  if (!Number.isInteger(value) || value < 1 || value > 99999) {
-    input.value = state[productId].step;
+  if (
+    input.value.trim() === "" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_STOCK_VALUE
+  ) {
+    input.value = state[productId]?.step ?? 2;
     return;
   }
 
@@ -884,12 +1233,17 @@ productList.addEventListener("change", (event) => {
   input.value = state[productId].step;
 });
 
-// Wyszukiwanie produktów
+/* ========================================
+   WYSZUKIWANIE
+======================================== */
+
 searchInput.addEventListener("input", () => {
   searchQuery = searchInput.value.trim();
-
   renderProducts();
 });
 
-// Uruchomienie aplikacji
+/* ========================================
+   START
+======================================== */
+
 render();
