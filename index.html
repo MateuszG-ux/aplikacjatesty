@@ -1,0 +1,54 @@
+
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#171715">
+  <title>Magazyn | StockFlow</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a href="#" class="logo" aria-label="Strona główna">
+        <img src="logo.png" alt="Logo firmy">
+    </a>
+
+    <nav class="main-categories" aria-label="Kategorie główne">
+      <button class="main-tab active" data-category="odziez">Odzież</button>
+      <button class="main-tab" data-category="ppe">PPE</button>
+      <button class="main-tab" data-category="obuwie">Obuwie</button>
+      <button class="main-tab" data-category="pozostale" type="button">Pozostałe</button>
+    </nav>
+
+    <div class="topbar-spacer"></div>
+  </header>
+
+  <main class="app">
+    <section class="filters" id="filters" aria-label="Filtry produktów"></section>
+
+    <div class="results-info">
+      <span id="results-count">Produkty: 0</span>
+      <input
+        type="search"
+        id="search"
+        placeholder="Szukaj produktu..."
+        aria-label="Szukaj produktu"
+      >
+    </div>
+
+    <section id="product-list" class="product-list" aria-label="Lista produktów">
+    </section>
+
+    <p id="empty-message" class="empty-message" hidden>
+      Brak produktów w tej kategorii.
+    </p>
+
+    <footer class="footer">
+      <span>Stan Magazynowy</span>
+      <span>Wersja demonstracyjna</span>
+    </footer>
+  </main>
+</body>
+</html>
